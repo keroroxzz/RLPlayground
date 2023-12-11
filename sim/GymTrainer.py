@@ -189,10 +189,15 @@ class GymTrainer:
                 self.plotHistory()
 
     #================= Gym Training =================
-    def train(self, agent: BaseAgent=None, plot=False)->None:
+    def train(self, agent: BaseAgent=None, plot=False, clearHist=True)->None:
         """
         Start the training process.
         """
+
+        if clearHist:
+            self.clearHistory()
+
+        agent.train()
 
         # prepare the stage data
         stage={
