@@ -65,7 +65,7 @@ class PolicyGradientAgentMC(BaseAgent):
 
         self.logProbs.append(self.lastAction['logProb'])
         self.reward.append(reward)
-        if done or stage['step'] == stage['maxStep']:
+        if done or stage['step'] == stage['maxStep'] - 1:
             self.finalReward.append(reward)
         
         return {}
