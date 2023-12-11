@@ -2,6 +2,16 @@
 
 This is a playground to implement Reinforcement Algorithms for personal interest.
 
+## Installation
+
+    # for cuda 12.1
+    conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia
+
+    # gym
+    conda install -c conda-forge gym
+    conda install -c conda-forge box2d-py
+    pip install pygame
+
 ## RL Algorithms
 
 ### Done
