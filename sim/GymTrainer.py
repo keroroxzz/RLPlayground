@@ -31,8 +31,8 @@ class GymTrainer:
     def initHyperParameters(self, **kwargs)->None:
         keys = kwargs.keys()
         
-        self.maxBatch = kwargs['maxBatch'] if 'maxBatch' in keys else 500
-        self.batchSize = kwargs['batchSize'] if 'batchSize' in keys else 5
+        self.maxEpisode = kwargs['maxEpisode'] if 'maxEpisode' in keys else 500
+        self.maxBatch = kwargs['maxBatch'] if 'maxBatch' in keys else 5
         self.maxStep = kwargs['maxStep'] if 'maxStep' in keys else 1000
         self.seed = kwargs['seed'] if 'seed' in keys else None
 
@@ -150,12 +150,12 @@ class GymTrainer:
             'batch': 0, 
             'episode': 0, 
             'step': 0,
-            'maxBatch': 0,
-            'batchSize': episode,
+            'maxEpisode': 0,
+            'maxBatch': episode,
             'maxStep': maxStep}
 
         print("=============Start Testing=============")
-        for ep in np.arange(self.batchSize):
+        for ep in np.arange(self.maxBatch):
             stage['episode'] = ep
             state = self.reset()
 
@@ -189,7 +189,7 @@ class GymTrainer:
                 self.plotHistory()
 
     #================= Gym Training =================
-    def train(self, agent: BaseAgent=None, plot=False, clearHist=True)->None:
+    def train(self, agent: BaseAgent=None, plot_cycle=0, eval_cycle=0, clearHist=True)->None:
         """
         Start the training process.
         """
@@ -202,22 +202,28 @@ class GymTrainer:
         # prepare the stage data
         stage={
             'batch': 0, 
+            'total_batch': 0,
             'episode': 0, 
+            'total_episode': 0,
             'step': 0,
+            'total_step': 0,
+            'maxEpisode': self.maxEpisode,
             'maxBatch': self.maxBatch,
-            'batchSize': self.batchSize,
             'maxStep': self.maxStep}
 
         print("=============Start Training=============")
-        for bt in np.arange(self.maxBatch):
+        for bt in np.arange(self.maxEpisode):
             stage['batch'] = bt
+            stage['total_batch'] += 1
 
-            for ep in np.arange(self.batchSize):
+            for ep in np.arange(self.maxBatch):
                 stage['episode'] = ep
+                stage['total_episode'] += 1
                 state = self.reset()
 
                 for step in np.arange(self.maxStep):
                     stage['step'] = step
+                    stage['total_step'] += 1
 
                     # act and learn
                     action = agent.act(state, stage)['action']
@@ -236,11 +242,12 @@ class GymTrainer:
                 episodeMeta = agent.onTrainEpisodeDone(stage)
                 self.addHistory(episodeMeta)
 
+
+                # visualize
+                if plot_cycle>0 and stage['total_episode']%plot_cycle == 0:
+                    self.plotHistory()
+
             # trigger per batch operation
             batchMeta = agent.onTrainBatchDone(stage)
             self.addHistory(batchMeta)
-
-            # visualize
-            if plot:
-                self.plotHistory()
             

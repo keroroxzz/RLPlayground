@@ -50,8 +50,8 @@ class BaseAgent(abc.ABC, torch.nn.Module):
             'batch': bt, 
             'episode': ep, 
             'step': state,
+            'maxEpisode': self.maxEpisode,
             'maxBatch': self.maxBatch,
-            'batchSize': self.batchSize,
             'maxStep': self.maxStep}
         return: the action to take.
         """
@@ -115,7 +115,7 @@ class BaseAgent(abc.ABC, torch.nn.Module):
         stage:{
             'episode': ep, 
             'step': state,
-            'batchSize': self.batchSize,
+            'maxBatch': self.maxBatch,
             'maxStep': self.maxStep}
         """
         return {}
@@ -134,8 +134,7 @@ class BaseAgent(abc.ABC, torch.nn.Module):
     #=============================================================#
     @abc.abstractmethod
     def learn(self, 
-              state: 
-              torch.Tensor, 
+              state: torch.Tensor, 
               action: torch.Tensor, 
               reward: torch.Tensor, 
               nextState: torch.Tensor, 
@@ -151,12 +150,14 @@ class BaseAgent(abc.ABC, torch.nn.Module):
         nextState: the state of the environment after taking the action.
         done: whether the episode has ended.
         stage:{
-            'batch': bt, 
-            'episode': ep, 
-            'step': state,
+            'batch': the current batch number, 
+            'episode': the current episode number within a batch, 
+            'step': the current step number within a batch, 
+            'maxEpisode': self.maxEpisode,
             'maxBatch': self.maxBatch,
-            'batchSize': self.batchSize,
             'maxStep': self.maxStep}
+
+        return: a dictionary of meta data {'plot name': value} to be recorded.
         """
         pass
 
@@ -166,7 +167,7 @@ class BaseAgent(abc.ABC, torch.nn.Module):
         Learn from the collected experience.
         This function will only run once every episode. 
         
-        return: a dictionary of meta data {'key': value} to be recorded.
+        return: a dictionary of meta data {'plot name': value} to be recorded.
         """
         pass
 
@@ -176,6 +177,6 @@ class BaseAgent(abc.ABC, torch.nn.Module):
         Learn from the collected experience.
         This function will only run once every batch. 
         
-        return: a dictionary of meta data {'key': value} to be recorded.
+        return: a dictionary of meta data {'plot name': value} to be recorded.
         """
         pass
