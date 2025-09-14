@@ -17,13 +17,13 @@ This is a playground to implement Reinforcement Algorithms for personal interest
 ### Done
 
 1. PolicyGradient
+2. AdvantageActroCritic (A2C)
 
 ### To-be Done
 
 1. QLearning
-2. DQN
-3. A3C (WIP)
-4. PPO
+2. DeepQLearning (DQN)
+4. ProximalPolicyOptimization (PPO)
 
 ## Basic Classes
 

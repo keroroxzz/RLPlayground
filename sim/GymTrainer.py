@@ -1,28 +1,36 @@
 import os
-import gym
+import gymnasium as gym
 import numpy as np
 import random
-import torch
-from IPython import display
+import datetime
 import matplotlib.pyplot as plt
-from framework.BaseAgent import BaseAgent
+from tqdm.notebook import tqdm
+from IPython import display
+
+# torch libs
+import torch
+from torch.utils.tensorboard import SummaryWriter
+
+# local libs
+from utils import *
+from framework.BaseAgent import BaseAgent, ActionData
+
+writer = SummaryWriter('./runs/'+datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
 
 class GymTrainer:
     """
-    The GymTrainer class is a wrapper of gym environments. It provides a simple interface to train an agent.
+    The GymTrainer class is a wrapper of gym environments.
+    It provides a simple interface to train an agent.
     """
 
     def __init__(self, envName: str, device='cpu', **kwargs):
-
         self.device = device
-        self.history = {}
-
         self.initHyperParameters(**kwargs)
         self.initGymEnv(envName)
 
     #================= Gym Getter =================
     def actionSize(self)->int:
-        return self.env.action_space.n
+        return self.envs.single_action_space.n
 
     #================= Gym Initailizer =================
     def setAgent(self, agent: BaseAgent):
@@ -32,7 +40,9 @@ class GymTrainer:
         keys = kwargs.keys()
         
         self.maxEpisode = kwargs['maxEpisode'] if 'maxEpisode' in keys else 500
-        self.maxBatch = kwargs['maxBatch'] if 'maxBatch' in keys else 5
+        self.batchSize = kwargs['batchSize'] if 'batchSize' in keys else 5
+        self.envNum = kwargs['envNum'] if 'envNum' in keys else 6
+        self.maxStep = kwargs['maxStep'] if 'maxStep' in keys else 1000
         self.maxStep = kwargs['maxStep'] if 'maxStep' in keys else 1000
         self.seed = kwargs['seed'] if 'seed' in keys else None
 
@@ -42,7 +52,10 @@ class GymTrainer:
         print(f"Initializing Gym Environments of {envName}")
 
         print("init envs")
-        self.env = gym.make(envName, render_mode='rgb_array')
+        self.envs = gym.make_vec(
+            id=envName, 
+            num_envs=self.envNum, 
+            render_mode='rgb_array')
 
         if self.seed is not None:
             print(f"set seeds {self.seed}")
@@ -68,76 +81,84 @@ class GymTrainer:
         torch.use_deterministic_algorithms(True)
 
         # gym env
-        self.env.np_random = np.random.default_rng(seed=self.seed) 
-        self.env.action_space.seed(self.seed)
+        # self.env.np_random = np.random.default_rng(seed=self.seed) 
+        self.envs.action_space.seed(self.seed)
 
     #================= Gym Wrapper =================
     # gym warpper that transform the output of env to torch tensor
     def reset(self)->torch.Tensor:
-        state = self.env.reset()[0]
+        state, info = self.envs.reset(seed=self.seed)
         return torch.tensor(state, dtype=torch.float32, device=self.device, requires_grad=False)
     
-    def step(self, action: torch.Tensor)->tuple:
-        next_state, reward, done, _, _ = self.env.step(action.item())
-
-        return torch.tensor(next_state, dtype=torch.float32, device=self.device, requires_grad=False),\
-                torch.tensor((reward,), dtype=torch.float32, device=self.device, requires_grad=False),\
-                done
+    def step(self, action:ActionData)->tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        nextStates, rewards, terminations, truncations, info = self.envs.step(action.getAction())
+        return torch.tensor(nextStates, dtype=torch.float32, device=self.device, requires_grad=False),\
+               torch.tensor(rewards, dtype=torch.float32, device=self.device, requires_grad=False),\
+               torch.tensor(np.bitwise_or(terminations, truncations), dtype=torch.int32, device=self.device, requires_grad=False)
 
     #================= Gym History =================
-    def addHistory(self, meta: dict)->None:
+    def addHistory(self, pts: list[GraphPoint])->None:
         """
         Append each items in meta to the history.
         """
+        for p in pts:
+            p.addTo(writer)
 
-        for key in meta.keys():
-            if key not in self.history.keys():
-                self.history[key] = [meta[key]]
-            else:
-                self.history[key].append(meta[key])
-
-    def getHistory(self, key: str)->list:
+    #================= Gym Training =================
+    def train(self, agent: BaseAgent)->None:
         """
-        Get the item with key from the history.
+        Start the training process.
         """
+        agent.train()
 
-        return self.history[key]
+        # prepare the stage data
+        stage = Stage(self.maxEpisode, self.batchSize, self.maxStep)
 
-    def removeHistory(self, key: str)->None:
-        """
-        Remove the item with key from the history.
-        """
+        print("=============Start Training=============")
+        # epsBar = tqdm(range(self.maxEpisode))
+        while True:
+            # move the agent to the same device as gym
+            agent_old_device = agent.device
+            agent.to(self.device)
 
-        del self.history[key]
+            # reset environments
+            state = self.reset()
 
-    def clearHistory(self)->None:
-        """
-        Clear the history.
-        """
-        
-        self.history = {}
+            # start training batch
+            stage.episode = 0
+            stage.step = np.zeros(self.envs.num_envs)
+            for _ in np.arange(self.maxStep):
+                stage.step += 1
+                stage.total_step += self.envs.num_envs
 
-    def plotHistory(self, clear=True, figsize=(20, 6), width=3)->None:
-        """
-        Plot the history of the training process.
-        """
+                # act and memorize
+                actions = agent.act(state, stage)
+                nextStates, rewards, dones = self.step(actions)
+                stepRecord = agent.memorize(state, actions, rewards, nextStates, dones, stage)
+                self.addHistory(stepRecord)
 
-        if clear:
-            display.clear_output(wait=True)
+                # update state
+                state = nextStates
 
-        plt.figure(figsize=figsize)
+                finishedEps = dones.sum().item()
+                stage.totalEpisode += finishedEps
+                stage.episode += finishedEps
+                stage.step *= 1-dones.numpy()
 
-        plotCount = len(self.history.keys())
-        height = plotCount//width + 1
+                # if a batch is finished
+                if stage.episode>self.batchSize:
+                    break
 
-        i=0
-        for key in self.history.keys():
-            i+=1
-            plt.subplot(height, width, i)
-            plt.plot(self.history[key])
-            plt.title(key)
+            stage.totalBatch += 1
 
-        plt.show()
+            # trigger per batch operation
+            agent.to(agent_old_device)
+            batchRecord = agent.onTrainBatchDone(stage)
+            self.addHistory(batchRecord)
+
+            # if a batch is finished
+            if stage.totalEpisode>self.maxEpisode:
+                break
 
     #================= Gym Test =================
     def test(self, agent: BaseAgent, episode=5, maxStep=5000, plot=False)->None:
@@ -146,33 +167,30 @@ class GymTrainer:
         """
 
         # prepare the stage data
-        stage={
-            'batch': 0, 
-            'episode': 0, 
-            'step': 0,
-            'maxEpisode': 0,
-            'maxBatch': episode,
-            'maxStep': maxStep}
+        stage = Stage(episode, 1, maxStep)
 
         print("=============Start Testing=============")
-        for ep in np.arange(self.maxBatch):
-            stage['episode'] = ep
+        for ep in np.arange(stage.maxEpisode):
+            stage.episode = ep
+            stage.totalEpisode += 1
             state = self.reset()
 
-            img = plt.imshow(self.env.render())
+            img = plt.imshow(self.envs.render()[0])
 
-            for step in np.arange(maxStep):
-                stage['step'] = step
+            for step in np.arange(stage.maxStep):
+                stage.step = step
+                stage.total_step += 1
 
-                # act and learn
-                action = agent.act(state, stage)['action']
+                # act and memorize
+                action = agent.act(state, stage)
                 next_state, reward, done = self.step(action)
-                stepMeta = agent.onTestStepDone(state, action, reward, next_state, done, stage)
-                self.addHistory(stepMeta)
+                stepRecord = agent.onTestStepDone(state, action, reward, next_state, done, stage)
+                self.addHistory(stepRecord)
 
-                img.set_data(self.env.render())
-                display.clear_output(wait=True)
-                display.display(plt.gcf())
+                if step % 3 == 0:
+                    img.set_data(self.envs.render()[0])
+                    display.clear_output(wait=True)
+                    display.display(plt.gcf())
 
                 # update state
                 state = next_state
@@ -181,73 +199,6 @@ class GymTrainer:
                     break
 
             # trigger per episode operation
-            episodeMeta = agent.onTestEpisodeDone(stage)
-            self.addHistory(episodeMeta)
-
-            # visualize
-            if plot:
-                self.plotHistory()
-
-    #================= Gym Training =================
-    def train(self, agent: BaseAgent=None, plot_cycle=0, eval_cycle=0, clearHist=True)->None:
-        """
-        Start the training process.
-        """
-
-        if clearHist:
-            self.clearHistory()
-
-        agent.train()
-
-        # prepare the stage data
-        stage={
-            'batch': 0, 
-            'total_batch': 0,
-            'episode': 0, 
-            'total_episode': 0,
-            'step': 0,
-            'total_step': 0,
-            'maxEpisode': self.maxEpisode,
-            'maxBatch': self.maxBatch,
-            'maxStep': self.maxStep}
-
-        print("=============Start Training=============")
-        for bt in np.arange(self.maxEpisode):
-            stage['batch'] = bt
-            stage['total_batch'] += 1
-
-            for ep in np.arange(self.maxBatch):
-                stage['episode'] = ep
-                stage['total_episode'] += 1
-                state = self.reset()
-
-                for step in np.arange(self.maxStep):
-                    stage['step'] = step
-                    stage['total_step'] += 1
-
-                    # act and learn
-                    action = agent.act(state, stage)['action']
-                    next_state, reward, done = self.step(action)
-                    stepMeta = agent.learn(state, action, reward, next_state, done, stage)
-                    self.addHistory(stepMeta)
-
-                    # update state
-                    state = next_state
-
-                    if done or step == self.maxStep-1:
-                        break
-
-
-                # trigger per episode operation
-                episodeMeta = agent.onTrainEpisodeDone(stage)
-                self.addHistory(episodeMeta)
-
-
-                # visualize
-                if plot_cycle>0 and stage['total_episode']%plot_cycle == 0:
-                    self.plotHistory()
-
-            # trigger per batch operation
-            batchMeta = agent.onTrainBatchDone(stage)
-            self.addHistory(batchMeta)
+            episodeRecord = agent.onTestEpisodeDone(stage)
+            self.addHistory(episodeRecord)
             

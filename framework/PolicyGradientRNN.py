@@ -62,7 +62,7 @@ class RNNPolicyGradientAgentMC(BaseAgent):
 
         return self.lastAction
     
-    def learn(self, 
+    def memorize(self, 
               state: torch.Tensor, 
               action: torch.Tensor, 
               reward: torch.Tensor, 

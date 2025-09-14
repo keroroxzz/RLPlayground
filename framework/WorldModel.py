@@ -25,7 +25,7 @@ class PolicyNetwork(nn.Module):
     
 class WorldNetwork(nn.Module):
     """
-    A World Model Network to learn the reward of the agent given a state and action.
+    A World Model Network to memorize the reward of the agent given a state and action.
     It enable the backpropagation through the (modeled) environment to directly train the agent.
     """
 
@@ -74,7 +74,7 @@ class WorldModelAgent(BaseAgent):
 
         return self.lastAction
     
-    def learn(self, 
+    def memorize(self, 
               state: torch.Tensor, 
               action: torch.Tensor, 
               reward: torch.Tensor, 
