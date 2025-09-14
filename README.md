@@ -50,7 +50,7 @@ This is a playground to learn and implement Reinforcement Algorithms.
 
 ### To-do
 1. QLearning
-2. DeepQLearning (DQN)
+2. [WIP] DeepQLearning (DQN)
 4. ProximalPolicyOptimization (PPO)
 
 ## How to train your agent?
