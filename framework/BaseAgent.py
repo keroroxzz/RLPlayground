@@ -1,4 +1,5 @@
 import abc
+import os
 import numpy as np
 from typing import Tuple, Any, Callable, Optional, overload, TypeVar, Union
 from typing_extensions import Self
@@ -51,12 +52,13 @@ class BaseAgent(abc.ABC, torch.nn.Module):
         self.device = device
         return super().to(device=device, **kwargs)
 
-    def save(self, path: str):
+    def save(self, name: str):
         """
         Save the state dict of the agent to a file.
         """
-
-        torch.save(self.state_dict(), path)
+        if os.path.exists("weights") == False:
+            os.mkdir("weights")
+        torch.save(self.state_dict(), os.path.join("weights", name+".pt"))
         return self
     
     def load(self, path: str):

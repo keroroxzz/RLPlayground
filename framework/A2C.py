@@ -53,9 +53,9 @@ class CriticNetwork(nn.Module):
     But how does this help training?
 
     Consider a sequence of states and actions:
-    States:  S = s1, s2, s3, ..., sN
-    Actions: A = a1, a2, a3, ..., aN
-    Rewards: R = r1, r2, r3, ..., rN
+    States:  s1, s2, s3, ..., sN
+    Actions: a1, a2, a3, ..., aN
+    Rewards: r1, r2, r3, ..., rN
 
     We want to know how much reward the agent can expect after observing a state si.
     One could naively define:
@@ -139,6 +139,7 @@ class AdvantageActorCriticAgent(BaseAgent):
         self.dones.append(dones)
         self.finalReward.extend([r for r,d in zip(rewards, dones) if d==1])
 
+
         return [GraphPoint("Train/mean_step_reward", stage.total_step, rewards.mean().item())]
 
     def onTrainBatchDone(self, stage: Stage):
@@ -152,7 +153,11 @@ class AdvantageActorCriticAgent(BaseAgent):
         # calculate normalized discounted rewards
         discountedRewards = rewards
         for i in range(discountedRewards.shape[0]-2, -1, -1):
+            # Ri = ri + gamma * Ri+1
             discountedRewards[i] += self.gamma * discountedRewards[i+1] * (1-dones[i])
+        # normalize the rewards to
+        # 1. prevent all positive or negative rewards
+        # 2. stablize the training by normalize the variance
         discountedRewards = (discountedRewards - discountedRewards.mean()) / (torch.std(discountedRewards) + 1e-9)
 
         # move to device
@@ -188,7 +193,7 @@ class AdvantageActorCriticAgent(BaseAgent):
         self.discounted_rewards = []
         self.finalReward = []
 
-        print(f"Episode:{stage.totalEpisode} \t Loss: {loss.item():.2f} \t AvgAdv: {avgAdvantages:.2f} \t AvgRew: {avgReward:.2f} \t FinRew: {finalReward:.2f} \t LossCritic: {lossCritic.item():.2f}")
+        print(f"Batch:{stage.totalBatch} \t Episode:{stage.totalEpisode} \t Loss: {loss.item():.2f} \t AvgAdv: {avgAdvantages:.2f} \t AvgRew: {avgReward:.2f} \t FinRew: {finalReward:.2f} \t LossCritic: {lossCritic.item():.2f}")
 
         return [GraphPoint('Train/loss', stage.totalEpisode, loss.item()), 
                 GraphPoint('Train/avgAdvantages', stage.totalEpisode, avgAdvantages), 
