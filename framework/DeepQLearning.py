@@ -37,16 +37,14 @@ class QNetwork(nn.Module):
 
         # Initialize a 3 layers network
         self.fc1 = nn.Linear(stateNum, layer[0])
-        self.fc2 = nn.Linear(layer[0], layer[1])
-        self.fc3 = nn.Linear(layer[1], actionNum)
+        self.fc2 = nn.Linear(layer[0], actionNum)
 
     def forward(self, state):
         # Mapping the state to the expected value for all actions.
         # We choose ReLU as our activation function to allow unbounded output 
         # as the reward is not explicitly bounded like action probability does.
         hid = torch.relu(self.fc1(state))
-        hid = torch.relu(self.fc2(hid))
-        return self.fc3(hid)
+        return self.fc2(hid)
     
 
 class DeepQLearning(BaseAgent):
@@ -54,7 +52,7 @@ class DeepQLearning(BaseAgent):
     A Policy Gradient Agent that uses Monte Carlo method to estimate the policy gradient.
     """
 
-    def __init__(self, actionNum, stateNum, gamma=0.99, qNetLR=0.001, layerQNet=[64, 64]):
+    def __init__(self, actionNum, stateNum, gamma=1.0, qNetLR=0.001, layerQNet=[32]):
         super().__init__(actionNum)
         
         self.gamma = gamma
@@ -99,7 +97,6 @@ class DeepQLearning(BaseAgent):
         self.dones.append(dones)
         self.finalReward.extend([r for r,d in zip(rewards, dones) if d==1])
 
-
         return [GraphPoint("Train/mean_step_reward", stage.total_step, rewards.mean().item())]
 
     def onTrainBatchDone(self, stage: Stage):
@@ -111,14 +108,14 @@ class DeepQLearning(BaseAgent):
         finalReward = torch.stack(self.finalReward)
 
         # calculate normalized discounted rewards
-        discountedRewards = rewards
+        discountedRewards = rewards.clone()
         for i in range(discountedRewards.shape[0]-2, -1, -1):
             # Ri = ri + gamma * Ri+1
             discountedRewards[i] += self.gamma * discountedRewards[i+1] * (1-dones[i])
         # normalize the rewards to
         # 1. prevent all positive or negative rewards
         # 2. stablize the training by normalize the variance
-        # discountedRewards = (discountedRewards - discountedRewards.mean()) / (torch.std(discountedRewards) + 1e-9)
+        discountedRewards = (discountedRewards - discountedRewards.mean()) / (torch.std(discountedRewards) + 1e-9)
 
         # move to device
         states = states.to(self.device)

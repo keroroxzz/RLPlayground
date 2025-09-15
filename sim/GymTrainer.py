@@ -45,7 +45,7 @@ class GymTrainer:
         Get the number of posible actions to do.
         This is usually the output size of the policy network.
         """
-        return self.envs.single_action_space.n
+        return self.envs.single_action_space.shape[0]
 
     #================= Gym Initailizer =================
     def initHyperParameters(
