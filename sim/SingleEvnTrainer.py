@@ -14,7 +14,19 @@ from torch.utils.tensorboard import SummaryWriter
 # local libs
 from utils import *
 from framework.BaseAgent import BaseAgent, ActionData
-    
+
+
+class BipedalWalkerRewardWrapper(gym.RewardWrapper):
+    """
+    Rescale the negative rewards from -100 to -1.
+    https://github.com/jet-black/ppo-lstm-parallel/blob/master/reward.py
+    """
+    def __init__(self, env):
+        super().__init__(env)
+
+    def reward(self, reward):
+        return max(-1.0, reward)
+
 class GymTrainer:
     """
     The GymTrainer class is a wrapper of gym environments.
@@ -46,32 +58,22 @@ class GymTrainer:
         Get the number of posible actions to do.
         This is usually the output size of the policy network.
         """
-        if isinstance(self.envs.action_space, gym.spaces.Discrete):
-            if self.envNum == 1:
-                return self.envs.action_space.n
-            else:
-                return self.envs.action_space.nvec[0]
-        elif isinstance(self.envs.action_space, gym.spaces.Box):
-            if self.envNum == 1:
-                return self.envs.action_space.shape[0]
-            else:
-                return self.envs.action_space.shape[1]
+        return 4
+        if isinstance(self.envs.single_action_space, gym.spaces.Discrete):
+            return self.envs.single_action_space.n
+        elif isinstance(self.envs.single_action_space, gym.spaces.Box):
+            return self.envs.single_action_space.shape[0]
     
     def stateSize(self) -> int:
         """
         Get the dimension of state.
         This is usually the input size of the policy/value network.
         """
-        if isinstance(self.envs.observation_space, gym.spaces.Discrete):
-            if self.envNum == 1:
-                return self.envs.observation_space.n
-            else:
-                return self.envs.observation_space.nvec[0]
-        elif isinstance(self.envs.observation_space, gym.spaces.Box):
-            if self.envNum == 1:
-                return self.envs.observation_space.shape[0]
-            else:
-                return self.envs.observation_space.shape[1]
+        return 24
+        if isinstance(self.envs.single_observation_space, gym.spaces.Discrete):
+            return self.envs.single_observation_space.n
+        elif isinstance(self.envs.single_observation_space, gym.spaces.Box):
+            return self.envs.single_observation_space.shape[0]
 
     #================= Gym Initailizer =================
     def initHyperParameters(
@@ -82,14 +84,19 @@ class GymTrainer:
 
         kwargs: The extra args from the __init__
         """
-        self.hardcore = kwargs.get('hardcore', False)
-        self.maxEpisode = kwargs.get('maxEpisode', 512)
-        self.batchSize = kwargs.get('batchSize', None)
-        self.envNum = kwargs.get('envNum', 4)
-        self.maxStep = kwargs.get('maxStep', None)
-        self.stepLimitPenalty = kwargs.get('stepLimitPenalty', 0)
-        self.seed = kwargs.get('seed', None)
+        keys = kwargs.keys()
+        
+        self.maxEpisode = kwargs['maxEpisode'] if 'maxEpisode' in keys else 512
+        self.batchSize = kwargs['batchSize'] if 'batchSize' in keys else 8
+        self.envNum = kwargs['envNum'] if 'envNum' in keys else 4
+        self.maxStep = kwargs['maxStep'] if 'maxStep' in keys else 1000
+        self.stepLimitPenalty = kwargs['stepLimitPenalty'] if 'stepLimitPenalty' in keys else 0
 
+        if 'seed' in keys:
+            self.setEnvSeed(kwargs['seed'])
+        else:
+            self.seed = 0
+        
     def initGymEnv(
             self, 
             envName: str) -> None:
@@ -98,26 +105,14 @@ class GymTrainer:
 
         envName: The Gym environment name, ex: 'LunarLander-v3'
         """
-
         print("=============Initializing=============")
         print(f"Initializing Gym Environments of {envName}")
+        self.envs = gym.wrappers.RecordVideo(
+            gym.make(envName, render_mode="rgb_array"), 
+            f"{envName}/videos")
+        self.envs = BipedalWalkerRewardWrapper(self.envs)
+        self.envs.action_space.seed(self.seed)
 
-        print("init envs")
-        if self.envNum == 1:
-            self.envs = gym.make(
-                envName,
-                hardcore=self.hardcore,
-                render_mode="rgb_array")
-        else:
-            self.envs = gym.make_vec(
-                id=envName,
-                num_envs=self.envNum,
-                hardcore=self.hardcore,
-                render_mode='rgb_array')
-
-        if self.seed is not None:
-            print(f"set seeds {self.seed}")
-            self.setEnvSeed(self.seed)
     
     def setEnvSeed(
             self, 
@@ -127,6 +122,8 @@ class GymTrainer:
 
         seed: The random seed to fix environment and pytorch, etc.
         """
+        self.seed = seed
+        print(f"set seeds {self.seed}")
 
         os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
             
@@ -142,9 +139,6 @@ class GymTrainer:
         # torch env
         torch.use_deterministic_algorithms(True)
 
-        # gym env
-        self.envs.action_space.seed(self.seed)
-
     #================= Gym Wrapper =================
     # gym warpper that transform the output of env to torch tensor
     def reset(self) -> torch.Tensor:
@@ -153,11 +147,8 @@ class GymTrainer:
 
         action: The output from BaseAgent.act() carrying the action
         """
-        state, _ = self.envs.reset(seed=self.seed)
-        state = torch.tensor(state, dtype=torch.float32, device=self.evalDevice, requires_grad=False)
-        if self.envNum == 1:
-            state = state.unsqueeze(0)
-        return state
+        state, info = self.envs.reset(seed=self.seed)
+        return torch.tensor([state,], dtype=torch.float32, device=self.evalDevice, requires_grad=False)
     
     def step(
             self, 
@@ -167,23 +158,11 @@ class GymTrainer:
 
         action: The output from BaseAgent.act() carrying the action
         """
-        if self.envNum == 1:
-            action.action = action.action.squeeze(0)
-        nextStates, rewards, terminations, truncations, _ = self.envs.step(action.getAction())
-        nextStates = torch.tensor(nextStates, dtype=torch.float32, device=self.evalDevice, requires_grad=False)
-        rewards = torch.tensor(rewards, dtype=torch.float32, device=self.evalDevice, requires_grad=False)
-        dones = torch.tensor(np.bitwise_or(terminations, truncations), dtype=torch.int32, device=self.evalDevice, requires_grad=False)
-        if self.envNum == 1:
-            nextStates = nextStates.unsqueeze(0)
-            rewards = rewards.unsqueeze(0)
-            dones = dones.unsqueeze(0)
-        return nextStates, rewards, dones
-
-    def render(self) -> np.ndarray:
-        if self.envNum == 1:
-            return self.envs.render()
-        else:
-            return np.concatenate(self.envs.render(), axis=1)
+        # print(action.getAction())
+        nextStates, rewards, terminations, truncations, info = self.envs.step(action.getAction()[0])
+        return torch.tensor([nextStates,], dtype=torch.float32, device=self.evalDevice, requires_grad=False),\
+               torch.tensor([rewards,], dtype=torch.float32, device=self.evalDevice, requires_grad=False),\
+               torch.tensor([np.bitwise_or(terminations, truncations),], dtype=torch.int32, device=self.evalDevice, requires_grad=False)
 
     #================= Gym History =================
     def addHistory(
@@ -211,10 +190,7 @@ class GymTrainer:
 
         return: Name of the logging folder, SummaryWriter
         """
-        name = f"{self.envName}-\
-{"hardcore" if self.hardcore else "normal"}-\
-{agent.__class__.__name__}-\
-{datetime.datetime.now().strftime("%Y%m%d-%H%M%S")}"
+        name = f"{self.envName}-{agent.__class__.__name__}-{datetime.datetime.now().strftime("%Y%m%d-%H%M%S")}"
         return name, SummaryWriter(os.path.join(folder, name))
 
     #================= Gym Training =================
@@ -229,29 +205,36 @@ class GymTrainer:
         writer: The summary writer for Tensorboard logging, use None to disable logging
         """
         # prepare the stage data
-        stage = Stage(
-            self.maxEpisode,
-            self.envNum,
-            self.batchSize, 
-            self.maxStep)
+        stage = Stage(self.maxEpisode, self.batchSize, self.maxStep)
+        # torch.save(agent.policy.state_dict(), "initial_actor_my.pth")
 
         print("=============Start Training=============")
-        maxRwd = None
-        state = self.reset()
         while True:
-            stage.resetStageStates()
-            totalRwd = 0
-            while True:
+            # reset environments
+            state = self.reset()
+
+            # start training batch
+            stage.episode = 0
+            stage.step = np.zeros(self.envNum)
+            for s in np.arange(stage.maxStep):
+
                 # act and memorize
                 actions = agent.act(state, stage)
                 nextStates, rewards, dones = self.step(actions)
-                stage.updatePerStepStates(dones.numpy())
-                totalRwd += rewards.sum()
+                
+                finishedEps = dones.sum().item()
+                stage.totalEpisode += finishedEps
+                stage.episode += finishedEps
+                stage.totalStep += self.envNum
+                stage.step = (stage.step+1) * (1-dones.numpy())
+
+                # if stage.total_step >= 100:
+                #     exit()
 
                 # handle the case that no env is finished 
-                if stage.isMaxStepReached() and stage.episode == 0:
-                    dones += 1
+                if s == stage.maxStep-1 and stage.episode == 0:
                     stage.episode = self.envNum
+                    dones += 1
                     rewards -= self.stepLimitPenalty
                     print(f"Warning: No environment has finished after exceeding the maxStep {stage.maxStep}!\
                           Maybe consider setting a larger maxStep?")
@@ -260,41 +243,32 @@ class GymTrainer:
                 stepRecord = agent.memorize(state, actions, rewards, nextStates, dones, stage)
                 self.addHistory(stepRecord, writer)
                 
-                if stage.isBatchSizeReached() or stage.isMaxEpisodeReached():
-                    break
-
-                if self.envNum == 1 and dones[0] == 1:
-                    nextStates = self.reset() 
-
                 # update state
-                ###!!! there is a bug that env vec will not reset immediatly when it's done!!!###
-                # TODO: fix this bug in the future
                 state = nextStates
 
-            # save latest weight
-            if maxRwd is None or totalRwd >= maxRwd:
-                maxRwd = totalRwd
-                agent.save(
-                    name="best_weight", 
-                    path=writer.get_logdir())
-                self.addHistory(
-                    [GraphPoint('Train/maxTotalReward', stage.totalStep, maxRwd.item())], writer)
-                print(f"Save best weight with total reward:{totalRwd}")
+                if finishedEps > 0:
+                    state = self.reset()
 
-            stage.updatePerBatchStates()
+                # if a batch is finished
+                if stage.episode>=stage.batchSize:
+                    break
+            # break
+            print(f"Batch {stage.totalBatch} finished after {stage.totalStep+1} steps, total episodes: {stage.totalEpisode}")
+            stage.totalBatch += 1
 
             # trigger per batch operation
             batchRecord = agent.onTrainBatchDone(stage)
             self.addHistory(batchRecord, writer)
 
-            # save latest weight
             agent.save(
                 name="latest_weight", 
                 path=writer.get_logdir())
 
-            if stage.isMaxEpisodeReached():
+            # if a batch is finished
+            if stage.totalEpisode>=self.maxEpisode:
                 break
 
+        self.envs.close()
         return stage
 
     #================= Gym Test =================
@@ -329,19 +303,21 @@ class GymTrainer:
         # init plot for render
         if renderStep is not None:
             _, ax = plt.subplots(figsize=figsize)
-            img = ax.imshow(self.render())
+            img = ax.imshow(np.concatenate(self.envs.render(), axis=1))
 
-        stage.resetStageStates()
-        while True:
+        stage.step = np.zeros(self.envNum)
+        for step in np.arange(stage.maxStep):
+            stage.step += 1
+            stage.totalStep += self.envNum
+
             # act and memorize
             actions = agent.act(states, stage)
             nextStates, rewards, dones = self.step(actions)
-            stage.updatePerStepStates(dones.numpy())
             stepRecord = agent.onTestStepDone(states, actions, rewards, nextStates, dones, stage)
             self.addHistory(stepRecord, writer)
 
-            if renderStep is not None and stage.step.max() % renderStep == 0:
-                img.set_data(self.render())
+            if renderStep is not None and step % renderStep == 0:
+                img.set_data(np.concatenate(self.envs.render(), axis=1))
                 display.clear_output(wait=True)
                 display.display(plt.gcf())
 
@@ -364,15 +340,20 @@ class GymTrainer:
 
                 # reset the total rewards and steps of finished envs
                 cumulativeRewards[dones == 1] = 0.0
-                if stage.isMaxEpisodeReached():
-                    break
+                stage.step *= 1-dones.numpy()
 
-                if self.envNum == 1:
-                    nextStates = self.reset() 
+                # if target episode num is reached
+                stage.episode += numFinishedEnv
+                if stage.episode>=stage.maxEpisode:
+                    break
 
             # trigger per episode operation
             episodeRecord = agent.onTestEpisodeDone(stage)
             self.addHistory(episodeRecord, writer)
+
+        # handle 0 episode case
+        if stage.episode == 0:
+            stage.episode = 1
 
         averageTotalReward /= stage.episode
         print(f"Average Total Reward:{averageTotalReward} \t Max Total Reward:{maxTotalReward} \t Min Total Reward:{minTotalReward}")

@@ -1,29 +1,30 @@
 import abc
 import os
 import numpy as np
-from typing import Tuple, Any, Callable, Optional, overload, TypeVar, Union
+from typing import Optional
 from typing_extensions import Self
-from torch import device, dtype, Tensor
 from torch._prims_common import DeviceLikeType
 
 # torch libs
 import torch
-from torch.distributions import Categorical
 
 # local libs
 from utils import *
 
 class ActionData:
     """ 
-    A simple class to store the action data of the agent. 
-
-    action: The action taken by the agent as input for gym.
-    others: The data to be passed to the agent, which will be a member in ActionData
+    A simple class to store the action data of the agent.
+    It will be passed as an argument along with the corresponding states and rewards, etc.
 
     a = ActionData(action = action, probs = probs)
     a.probs => directly get the probs data
     """
-    def __init__(self, action: torch.Tensor, **kwargs: dict[str, torch.Tensor]):
+    def __init__(self, action: torch.Tensor, **kwargs: torch.Tensor):
+        """
+        Create an Action data with action and other customizable settings.
+        action: The action taken by the agent as input for gym.
+        others: The data to be passed to the agent, which will be a member in ActionData
+        """
         self.action = action
         for key, val in kwargs.items():
             setattr(self, key, val)
@@ -36,10 +37,17 @@ class ActionData:
 
 class BaseAgent(abc.ABC, torch.nn.Module):
     """ The Base Agent Class defines the interfaces of an agent. """
-    def __init__(self, action_space, device='cpu'):
+    def __init__(
+            self, 
+            actionSpace, 
+            device='cpu',
+            trainDevice:torch.device=torch.device("cuda"),
+            evalDevice:torch.device=torch.device("cpu")):
         super().__init__()
-        self.action_space = action_space
+        self.actionSpace = actionSpace
         self.device = device
+        self.trainDevice = trainDevice
+        self.evalDevice = evalDevice
 
     #===================== BaseAgent Implementations =====================#
     def to(
@@ -52,13 +60,13 @@ class BaseAgent(abc.ABC, torch.nn.Module):
         self.device = device
         return super().to(device=device, **kwargs)
 
-    def save(self, name: str):
+    def save(self, name: str, path: str = "weights"):
         """
         Save the state dict of the agent to a file.
         """
-        if os.path.exists("weights") == False:
-            os.mkdir("weights")
-        torch.save(self.state_dict(), os.path.join("weights", name+".pt"))
+        if os.path.exists(path) == False:
+            os.mkdir(path)
+        torch.save(self.state_dict(), os.path.join(path, name+".pt"))
         return self
     
     def load(self, path: str):
@@ -68,6 +76,15 @@ class BaseAgent(abc.ABC, torch.nn.Module):
 
         self.load_state_dict(torch.load(path))
         return self
+    
+    def train(self, mode:bool = True):
+        if mode:
+            # print("Switching agent to training mode.")
+            self.to(device=self.trainDevice)
+        else:
+            # print("Switching agent to evaluation mode.")
+            self.to(device=self.evalDevice)
+        return super().train(mode)
 
     #==================== Testing Update Callbacks ======================#
     def onTestStepDone(self, 

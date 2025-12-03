@@ -95,7 +95,7 @@ class PolicyGradientAgent(BaseAgent):
         self.finalReward.extend([r for r,d in zip(rewards, dones) if d==1])
 
 
-        return [GraphPoint("Train/mean_step_reward", stage.total_step, rewards.mean().item())]
+        return [GraphPoint("Train/mean_step_reward", stage.totalStep, rewards.mean().item())]
 
     def onTrainBatchDone(self, stage: Stage):
         # post-process memory
