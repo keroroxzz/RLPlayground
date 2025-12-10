@@ -1,5 +1,4 @@
 import numpy as np
-import math
 from collections import deque
 
 # torch libs
@@ -35,14 +34,14 @@ class GaussianCriticNetwork(nn.Module):
         for din, dout in zip(dimensions[:-1], dimensions[1:]):
             self.net.append(nn.Linear(din, dout))
             self.net.append(nn.ReLU())
-        self.net = self.net[:-1]
+        self.net = self.net[:-1]  # remove the last ReLU layer
 
     def forward(self, state) -> tuple[torch.Tensor, torch.Tensor]:
         logits = self.net(state)
         mean, std = torch.select(logits,-1,0), torch.clamp(torch.exp(torch.select(logits,-1,1)), 0.0001, 1.0)
         return mean, std
     
-class ProximalPolicyOptimizationAgent(BaseAgent):
+class GaussianPPOAgent(BaseAgent):
     def __init__(
             self, 
             actionNum, 
@@ -57,6 +56,8 @@ class ProximalPolicyOptimizationAgent(BaseAgent):
             trainEpoch=70,
             eps = 0.5,
             entropyBeta = 0.01,
+            criticEntropyBeta = 0.01,
+            entropySupressCoef = 1.0,
             lamda = 0.95,
             rwShaper = lambda rwds: torch.clamp(rwds, min = -1.0),
             trainDevice:torch.device=torch.device("cuda"),
@@ -68,6 +69,8 @@ class ProximalPolicyOptimizationAgent(BaseAgent):
         self.eps = eps
         self.rwShaper = rwShaper
         self.entropyBeta = entropyBeta
+        self.criticEntropyBeta = criticEntropyBeta
+        self.entropySupressCoef = entropySupressCoef
         self.memorySize = memorySize
         self.batchSize = batchSize
         self.trainEpoch = trainEpoch
@@ -132,8 +135,7 @@ class ProximalPolicyOptimizationAgent(BaseAgent):
         1. no entropy penalty
         """
         # extra value for next state
-        nextValues, _ = self.critic(nextStates) # [1, env num]
-        nextValues = nextValues.unsqueeze(0)#.squeeze(-1)
+        nextValues, _ = self.critic(nextStates.unsqueeze(0)) # [1, env num]
 
         # move the model to training device
         if not self.device == self.trainDevice:
@@ -144,7 +146,6 @@ class ProximalPolicyOptimizationAgent(BaseAgent):
         rewards = torch.stack(self.rewards) # [memory size, env num]
         dones = torch.stack(self.dones) # [memory size, env num]
         values, _ = self.critic(states) # [memory size, env num]
-        # values = values.squeeze(-1)
         actions = torch.stack(self.actions) # [memory size, env num, action size]
         probs = torch.stack(self.probs) # [memory size, env num, action size]
 
@@ -156,8 +157,10 @@ class ProximalPolicyOptimizationAgent(BaseAgent):
             for i in reversed(range(len(rewards))):
                 delta = (rewards[i] + self.gamma * values_cpu[i + 1] * dones[i] - values_cpu[i])
                 gae = delta + self.gamma * self.lamda * dones[i] * gae
+                # assert rewards[i].shape == dones[i].shape == values_cpu[i + 1].shape == delta.shape == gae.shape
                 returns.insert(0, (gae + values_cpu[i]))
         returns = torch.stack(returns).to(self.device)
+        # assert returns.shape == values.shape
         advantages = returns - values
         
         # Organize the training data
@@ -181,14 +184,16 @@ class ProximalPolicyOptimizationAgent(BaseAgent):
                 R = torch.exp(logProbs - probs_)
                 clipR = torch.clamp(R, 1.0-self.eps, 1.0+self.eps)
 
+                mean, std = self.critic(states_)
+                mean = mean.unsqueeze(-1)
+                std = std.unsqueeze(-1)
+
                 ## d.Actor loss ##
                 entropyLoss = dist.entropy().mean() * self.entropyBeta
-                actorLoss = -(torch.min(R*advantages_, clipR*advantages_)/(dist.entropy()+1.0)).mean() - entropyLoss
+                actorLoss = -(torch.min(R*advantages_, clipR*advantages_)/(self.entropySupressCoef*std.detach()+1.0)).mean() - entropyLoss
 
                 ### 3.Train Critic Network ###
-                mean, std = self.critic(states_)
-                entropyAppx = torch.log(std)
-                criticLoss = (returns_ - mean).pow(2).mean() + entropyAppx.mean() * self.entropyBeta
+                criticLoss = (returns_ - mean).pow(2).mean() + torch.log(std).pow(2).mean() * self.criticEntropyBeta
 
                 ### 4.backpropagate and optimize ###
                 self.optimizer.zero_grad()
